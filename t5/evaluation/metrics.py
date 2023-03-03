@@ -66,23 +66,28 @@ def bleu(targets, predictions, tokenizer="intl"):
   return {"bleu": bleu_score.score}
 
 
-def rouge(targets,
-          predictions,
-          score_keys=("rouge1", "rouge2", "rougeLsum"),
-          **kwargs):
+def rouge(
+    targets,
+    predictions,
+    score_keys=("rouge1", "rouge2", "rougeLsum"),
+    use_deterministic: bool = False,
+    **kwargs,
+):
   """Computes rouge score.
 
   Args:
     targets: list of strings
     predictions: list of strings
-    score_keys: list of strings with the keys to compute.
+    score_keys: list of strings with the keys to compute
+    use_deterministic (bool): use the deterministic version of rouge
     **kwargs: additional keyword arguments for RougeScorer.
+
   Returns:
     dict with score_key: rouge score across all targets and predictions
   """
-
   scorer = rouge_scorer.RougeScorer(rouge_types=score_keys, **kwargs)
-  aggregator = scoring.BootstrapAggregator()
+  if not use_deterministic:
+    aggregator = scoring.BootstrapAggregator()
 
   def _prepare_summary(summary):
     # Make sure the summary is not bytes-type
@@ -90,10 +95,25 @@ def rouge(targets,
     summary = summary.replace(" . ", " .\n")
     return summary
 
+  if use_deterministic:
+    count = 0
+    sum_scores = collections.defaultdict(int)
+
   for prediction, target in zip(predictions, targets):
     target = _prepare_summary(target)
     prediction = _prepare_summary(prediction)
-    aggregator.add_scores(scorer.score(target=target, prediction=prediction))
+    scores = scorer.score(target=target, prediction=prediction)
+    if use_deterministic:
+      count += 1
+      for k, v in scores.items():
+        sum_scores[k] += v.fmeasure
+    else:
+      aggregator.add_scores(scores)
+  if use_deterministic:
+    if count == 0:
+      raise ValueError("Predictions and targets must both have nonzero length")
+    result = {k: v / count for k, v in sum_scores.items()}
+    return {key: result[key] * 100 for key in score_keys}
   result = aggregator.aggregate()
   for key in score_keys:
     logging.info(
